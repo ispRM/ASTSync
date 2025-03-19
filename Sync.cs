@@ -492,7 +492,7 @@ public static class Sync
                 // Create an identifier for the SimulationUser_Id
                 string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
                 bool hasClicked = false;
-                DateTime? emailLinkClickedDateTime = null;
+                DateTimeOffset? emailLinkClickedDateTime = null;
 
                 // Add simulation user events in to table
                 if (userSimDetail.SimulationEvents is not null)
