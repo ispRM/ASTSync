@@ -491,7 +491,34 @@ public static class Sync
             {
                 // Create an identifier for the SimulationUser_Id
                 string id = $"{SimulationId}-{userSimDetail.SimulationUser?.UserId}";
-                
+                bool hasClicked = false;
+                DateTime? emailLinkClickedDateTime = null;
+
+                // Add simulation user events in to table
+                if (userSimDetail.SimulationEvents is not null)
+                {
+                    foreach (var simulationUserEvents in userSimDetail.SimulationEvents)
+                    {
+                        if (simulationUserEvents.EventName == "EmailLinkClicked")
+                        {
+                            hasClicked = true;
+                            emailLinkClickedDateTime = simulationUserEvents.EventDateTime;
+                        }
+                        _batchSimulationUserEvents.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
+                        {
+                            {"SimulationUser_Id", id},
+                            {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
+                            {"SimulationUserEvent_EventName", simulationUserEvents.EventName},
+                            {"SimulationUserEvent_EventDateTime", simulationUserEvents.EventDateTime},
+                            {"SimulationUserEvent_Browser", simulationUserEvents.Browser},
+                            {"SimulationUserEvent_IpAddress", simulationUserEvents.IpAddress},
+                            {"SimulationUserEvent_OsPlatformDeviceDetails", simulationUserEvents.OsPlatformDeviceDetails},
+                        }));
+
+                    }
+
+                }
+
                 // Add the table item
                 _batchSimulationUsers.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, userSimDetail.SimulationUser?.UserId)
                 {
@@ -506,32 +533,14 @@ public static class Sync
                     {"InProgressTrainingsCount", userSimDetail.InProgressTrainingsCount},
                     {"IsCompromised", userSimDetail.IsCompromised},
                     {"HasReported", userSimDetail.ReportedPhishDateTime is not null},
+                    {"HasClicked", hasClicked},
+                    {"EmailLinkClickedDateTime", emailLinkClickedDateTime},
                 }));
                 
                 // Determine if should sync user
                 if (await ShouldSyncUser(userSimDetail.SimulationUser?.UserId))
                 {
                     await SyncUser(GraphClient, userSimDetail.SimulationUser?.UserId);
-                }
-                
-                // Add simulation user events in to table
-                if (userSimDetail.SimulationEvents is not null)
-                {
-                    foreach (var simulationUserEvents in userSimDetail.SimulationEvents)
-                    {
-                        _batchSimulationUserEvents.EnqueueUpload(new TableTransactionAction(TableTransactionActionType.UpdateReplace, new TableEntity(SimulationId, $"{userSimDetail.SimulationUser?.UserId}_{simulationUserEvents.EventName}_{simulationUserEvents.EventDateTime.Value.ToUnixTimeSeconds()}")
-                        {
-                            {"SimulationUser_Id", id},
-                            {"SimulationUser_UserId", userSimDetail.SimulationUser?.UserId},
-                            {"SimulationUserEvent_EventName", simulationUserEvents.EventName},
-                            {"SimulationUserEvent_EventDateTime", simulationUserEvents.EventDateTime},
-                            {"SimulationUserEvent_Browser", simulationUserEvents.Browser},
-                            {"SimulationUserEvent_IpAddress", simulationUserEvents.IpAddress},
-                            {"SimulationUserEvent_OsPlatformDeviceDetails", simulationUserEvents.OsPlatformDeviceDetails},
-                        }));
-
-                    }
-
                 }
                 
                 return true; 
