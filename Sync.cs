@@ -80,18 +80,23 @@ public static class Sync
     private static BatchTable _batchTrainingUserCoverage { get; set; }
     
     [FunctionName("Sync")]
-    public static async Task RunAsync([TimerTrigger("0 0 * * * *")] TimerInfo myTimer, ILogger log)
+    public static async Task RunAsync([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
     {
         
         Stopwatch sw = Stopwatch.StartNew();
         
         _log = log;
-        
         // Get graph client
         var GraphClient = GetGraphServicesClient();
         
         _log.LogInformation($"AST Sync started at: {DateTime.UtcNow}");
         
+        const string stateTableName = "StateTable";
+        TableClient stateTable = new TableClient(GetStorageConnection(), stateTableName);
+        await stateTable.CreateIfNotExistsAsync();
+        int batchSize = int.TryParse(Environment.GetEnvironmentVariable("SimulationBatchSize", EnvironmentVariableTarget.Process), out int parsedSize) ? parsedSize : 15;
+        _log.LogInformation($"Batch size set to {batchSize} simulations per run (via env var).");
+
         // Spin up the batch queue processors
         _batchUsers = new BatchTable(GetStorageConnection(), "Users", _maxTableBatchSize, log);
         _batchSimulations = new BatchTable(GetStorageConnection(), "Simulations", _maxTableBatchSize, log);
@@ -117,20 +122,73 @@ public static class Sync
             throw;
         }
         
+        string lastSimulationId = null;
+        try
+        {
+            var entity = await stateTable.GetEntityAsync<SyncStateEntity>("State", "LastProcessedSimulation");
+            lastSimulationId = entity.Value.LastSimulationId;
+            _log.LogInformation($"Resuming sync from simulation ID: {lastSimulationId}");
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            _log.LogInformation("No previous simulation checkpoint found. Starting from beginning.");
+        }
         
         // Sync Tenant Simulation Users
-        foreach (string id in simulationIds)
+        bool resume = string.IsNullOrEmpty(lastSimulationId);
+        int processed = 0;
+        string lastProcessed = null;
+
+        foreach (var id in simulationIds.OrderBy(x => x))
         {
+            if (!resume)
+            {
+                if (id == lastSimulationId)
+                    resume = true;
+                continue;
+            }
+
+            if (processed >= batchSize)
+                break;
+
             try
             {
+                _log.LogInformation($"Processing simulation {id} ({processed + 1}/{batchSize})...");
                 await GetTenantSimulationUsers(GraphClient, id);
+                lastProcessed = id;
+                processed++;
+
+                await stateTable.UpsertEntityAsync(new SyncStateEntity
+                {
+                    LastSimulationId = lastProcessed
+                }, TableUpdateMode.Replace);
             }
             catch (Exception e)
             {
                 _log.LogError($"Failed to get simulation users for simulation {id}: {e}");
             }
-            
         }
+
+        if (processed == 0)
+        {
+            _log.LogInformation("No simulations processed in this run.");
+        }
+        else
+        {
+            _log.LogInformation($"Processed {processed} simulations in this run. Last processed ID: {lastProcessed}");
+        }
+
+        // Reset checkpoint solo se siamo arrivati in fondo
+        if (!string.IsNullOrEmpty(lastProcessed) && lastProcessed == simulationIds.OrderBy(x => x).Last())
+        {
+            _log.LogInformation("All simulations have been processed. Resetting checkpoint.");
+            try
+            {
+                await stateTable.DeleteEntityAsync("State", "LastProcessedSimulation");
+            }
+            catch (RequestFailedException e) when (e.Status == 404) { }
+        }
+
             
         
         // Remaining syncs
