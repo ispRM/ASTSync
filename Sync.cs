@@ -14,6 +14,8 @@ using Microsoft.Graph.Beta;
 using Microsoft.Graph.Beta.Models;
 using Microsoft.Graph.Beta.Models.ODataErrors;
 using Microsoft.Graph.Beta.Reports.Security.GetAttackSimulationTrainingUserCoverage;
+using Azure;
+using System.Linq;
 
 namespace ASTSync;
 
