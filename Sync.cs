@@ -111,12 +111,11 @@ public static class Sync
         // Sync Tenant Simulations to perform sync whilst sync'ing simulations to table
         // This can probably be moved to an async foreach below.
         // However, need to figure out how to do the async foreach return in a lambda (graph services client paging func.)
+        SortedDictionary<string, string> simulationIdMap;
 
-        HashSet<string> simulationIds;
-        
         try
         {
-             simulationIds = await GetTenantSimulations(GraphClient);
+            simulationIdMap = await GetTenantSimulations(GraphClient);
         }
         catch (Exception e)
         {
@@ -138,15 +137,17 @@ public static class Sync
         
         // Sync Tenant Simulation Users
         bool resume = string.IsNullOrEmpty(lastSimulationId);
-        if (!resume && !simulationIds.Contains(lastSimulationId))
+        if (!resume && !simulationIdMap.ContainsKey(lastSimulationId))
         {
             _log.LogWarning($"Last simulation ID '{lastSimulationId}' not found. Forcing full resync.");
             resume = true;
         }
         int processed = 0;
         string lastProcessed = null;
+        int totalToProcess = Math.Min(batchSize, simulationIdMap.Count);
+        _log.LogInformation($"Preparing to process up to {totalToProcess} simulations (out of {simulationIdMap.Count}) in this run.");
 
-        foreach (var id in simulationIds.OrderBy(x => x))
+        foreach (var id in simulationIdMap.Keys)
         {
             if (!resume)
             {
@@ -155,12 +156,13 @@ public static class Sync
                 continue;
             }
 
-            if (processed >= batchSize)
+            if (processed >= totalToProcess)
                 break;
 
             try
             {
-                _log.LogInformation($"Processing simulation {id} ({processed + 1}/{batchSize})...");
+                _log.LogInformation($"Processing simulation \"{simulationIdMap[id]}\" ({processed + 1}/{totalToProcess})...");
+
                 await GetTenantSimulationUsers(GraphClient, id);
                 lastProcessed = id;
                 processed++;
@@ -186,7 +188,7 @@ public static class Sync
         }
 
         // Reset checkpoint solo se siamo arrivati in fondo
-        if (!string.IsNullOrEmpty(lastProcessed) && lastProcessed == simulationIds.OrderBy(x => x).Last())
+        if (!string.IsNullOrEmpty(lastProcessed) && lastProcessed == simulationIdMap.Keys.Last())
         {
             _log.LogInformation("All simulations have been processed. Resetting checkpoint.");
             try
@@ -195,7 +197,6 @@ public static class Sync
             }
             catch (RequestFailedException e) when (e.Status == 404) { }
         }
-
             
         
         // Remaining syncs
@@ -247,7 +248,7 @@ public static class Sync
         await _batchPayloads.DisposeAsync();
         await _batchTrainingUserCoverage.DisposeAsync();
         
-        _log.LogInformation($"AST sync completed synchronising {simulationIds.Count} simulations in {sw.Elapsed}");
+        _log.LogInformation($"AST sync completed synchronising {simulationIdMap.Count} simulations in {sw.Elapsed}");
         
     }
     
@@ -256,11 +257,11 @@ public static class Sync
     /// Get Simulations for Tenant
     /// </summary>
     /// <param name="GraphClient"></param>
-    private static async Task<HashSet<string>> GetTenantSimulations(GraphServiceClient GraphClient)
+    private static async Task<SortedDictionary<string, string>> GetTenantSimulations(GraphServiceClient GraphClient)
     {
         
         // Simulation Ids
-        HashSet<string> SimulationIds = new HashSet<string>();
+        SortedDictionary<string, string> SimulationMap = new SortedDictionary<string, string>();
         
         // Get table client for table
         TableClient tableClient = new TableClient(GetStorageConnection(), "Simulations");
@@ -298,7 +299,7 @@ public static class Sync
                     (LastUserSync < DateTime.UtcNow.AddMonths(-1)))
                 {
                     _log.LogInformation($"Perform full synchronisation of simulation '{sim.DisplayName}' status {SimulationStatus.Running}");
-                    SimulationIds.Add(sim.Id);
+                    SimulationMap[sim.Id] = sim.DisplayName ?? "Empty Name";
                 }
                 
                 // Add the table item
@@ -336,7 +337,7 @@ public static class Sync
         // Flush batch simulations
         await _batchSimulations.FlushBatchAsync(TimeSpan.FromMinutes(5));
         
-        return SimulationIds;
+        return SimulationMap;
     }
 
     /// <summary>
