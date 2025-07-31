@@ -138,6 +138,11 @@ public static class Sync
         
         // Sync Tenant Simulation Users
         bool resume = string.IsNullOrEmpty(lastSimulationId);
+        if (!resume && !simulationIds.Contains(lastSimulationId))
+        {
+            _log.LogWarning($"Last simulation ID '{lastSimulationId}' not found. Forcing full resync.");
+            resume = true;
+        }
         int processed = 0;
         string lastProcessed = null;
 
